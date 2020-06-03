@@ -25,7 +25,7 @@ ArCOM Serial1COM(Serial1); // Creates an ArCOM object called myUART, wrapping Se
 
 uint32_t FirmwareVersion = 1;
 char moduleName[] = "PA"; // Name of module for manual override UI and state machine assembler
-char* eventNames[] = {"Port1In", "Port1Out", "Port2In", "Port2Out", "Port3In", "Port3Out", "Port4In", "Port4Out"};
+char* eventNames[] = {"Port1in", "Port1out", "Port2in", "Port2out", "Port3in", "Port3out", "Port4in", "Port4out"};
 byte nEventNames = (sizeof(eventNames)/sizeof(char *));
 
 byte opCode = 0; 
@@ -37,11 +37,14 @@ const byte inputChannels[4] = {4, 6, 8, 11};
 
 byte lastInputState[4] = {0};
 byte inputState[4] = {0};
+byte inputStateByte = 0x20;
 byte portID = 0;
 byte newValue = 0;
 byte thisEvent = 0;
+byte thisValue = 0;
 boolean usbStreaming = false;
 boolean newEvent = false;
+boolean portEnabled = false;
 
 // Timing
 uint64_t nMicrosRollovers = 0;
@@ -93,6 +96,7 @@ void loop() {
     newOp = false;
     switch (opCode) {
       case 255:
+        portEnabled = false;
         if (opSource == 1) {
           returnModuleInfo();
         } else if (opSource == 0) {
@@ -100,6 +104,7 @@ void loop() {
           myUSB.writeUint32(FirmwareVersion); // Send firmware version
           sessionStartTimeMicros = (uint64_t)microsTime;
         }
+        portEnabled = true;
       break;
       case 'V': // Set state of a valve
         portID = readByteFromSource(opSource);
@@ -146,6 +151,24 @@ void loop() {
           }
         }
       break;
+      case 'M': // Set LED and Valve Array Bits (1 = max brightness, open ; 0 = off, close)
+        newValue = readByteFromSource(opSource);
+        for (int i = 0; i < 8; i++) {
+          if (i < 4)  { // First 4 bits are for LEDS
+            if (bitRead(newValue, i)) {
+              analogWrite(ledChannels[i], 255);
+            } else {
+              analogWrite(ledChannels[i], 0);
+            }
+          } else {  // Last 4 bits are for Valves
+            if (bitRead(newValue, i)) {
+              digitalWrite(valveChannels[i-4], HIGH);
+            } else {
+              digitalWrite(valveChannels[i-4], LOW);
+            }  
+          }
+        }
+      break;
       case 'S': // Return current state of all ports to USB
         if (opSource == 0) {
           myUSB.writeByteArray(inputState, 4);
@@ -162,11 +185,13 @@ void loop() {
     }
   }
   thisEvent = 1;
+  thisValue = 1;
   newEvent = false;
   usbEventBuffer.uint64[1] = 0; // Clear event portion of buffer
   for (int i = 0; i < 4; i++) {
     inputState[i] = digitalRead(inputChannels[i]);
     if (inputState[i] == HIGH) {
+      inputStateByte = inputStateByte | thisValue;
       if (lastInputState[i] == LOW) {
         Serial1COM.writeByte(thisEvent);
         usbEventBuffer.uint8[i+8] = thisEvent;
@@ -175,6 +200,7 @@ void loop() {
     }
     thisEvent++;
     if (inputState[i] == LOW) {
+      inputStateByte = inputStateByte & ~thisValue;
       if (lastInputState[i] == HIGH) {
         Serial1COM.writeByte(thisEvent);
         usbEventBuffer.uint8[i+8] = thisEvent;
@@ -182,8 +208,14 @@ void loop() {
       }
     }
     thisEvent++; 
+    thisValue = thisValue << 1;
     lastInputState[i] = inputState[i];
   }
+
+ // if ((portEnabled) && (newEvent)) {
+ //   Serial1COM.writeByte(inputStateByte);
+ // }
+  
   if (newEvent && usbStreaming) {
     myUSB.writeByteArray(usbEventBuffer.uint8, 12);
   }
@@ -217,6 +249,8 @@ void returnModuleInfo() {
       Serial1COM.writeByte(*(eventNames[i]+j)); // Send the character
     }
   }
+  //Serial1COM.writeByte(1); // 1 if more info follows, 0 if not
+  //Serial1COM.writeByte('T'); // Op code for: Module Type (1 for LineState changes Module, 0 for Event type Module)
+  //Serial1COM.writeByte(1);  // LineState change Module
   Serial1COM.writeByte(0); // 1 if more info follows, 0 if not
 }
-
