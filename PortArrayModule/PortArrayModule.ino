@@ -37,14 +37,13 @@ const byte inputChannels[4] = {4, 6, 8, 11};
 
 byte lastInputState[4] = {0};
 byte inputState[4] = {0};
-byte inputStateByte = 0x20;
+byte inputStateByte = 0x0F;
 byte portID = 0;
 byte newValue = 0;
 byte thisEvent = 0;
 byte thisValue = 0;
 boolean usbStreaming = false;
 boolean newEvent = false;
-boolean portEnabled = false;
 
 // Timing
 uint64_t nMicrosRollovers = 0;
@@ -96,7 +95,6 @@ void loop() {
     newOp = false;
     switch (opCode) {
       case 255:
-        portEnabled = false;
         if (opSource == 1) {
           returnModuleInfo();
         } else if (opSource == 0) {
@@ -104,7 +102,6 @@ void loop() {
           myUSB.writeUint32(FirmwareVersion); // Send firmware version
           sessionStartTimeMicros = (uint64_t)microsTime;
         }
-        portEnabled = true;
       break;
       case 'V': // Set state of a valve
         portID = readByteFromSource(opSource);
@@ -169,6 +166,24 @@ void loop() {
           }
         }
       break;
+      case 'N': // Set LED and Valve Array Bits (1 = max brightness, open ; 0 = off, close)
+        newValue = readByteFromSource(opSource);
+        for (int i = 0; i < 8; i++) {
+          if (i%2 == 1 )  { // odd bits are leds
+            if (bitRead(newValue, i)) {
+              analogWrite(ledChannels[i/2], 255);
+            } else {
+              analogWrite(ledChannels[i/2], 0);
+            }
+          } else {  // Even bits are for Valves
+            if (bitRead(newValue, i)) {
+              digitalWrite(valveChannels[i/2], HIGH);
+            } else {
+              digitalWrite(valveChannels[i/2], LOW);
+            }  
+          }
+        }
+      break;
       case 'S': // Return current state of all ports to USB
         if (opSource == 0) {
           myUSB.writeByteArray(inputState, 4);
@@ -188,12 +203,13 @@ void loop() {
   thisValue = 1;
   newEvent = false;
   usbEventBuffer.uint64[1] = 0; // Clear event portion of buffer
+  inputStateByte = 0;
   for (int i = 0; i < 4; i++) {
     inputState[i] = digitalRead(inputChannels[i]);
     if (inputState[i] == HIGH) {
       inputStateByte = inputStateByte | thisValue;
       if (lastInputState[i] == LOW) {
-        Serial1COM.writeByte(thisEvent);
+       // Serial1COM.writeByte(thisEvent);
         usbEventBuffer.uint8[i+8] = thisEvent;
         newEvent = true;
       }
@@ -202,7 +218,7 @@ void loop() {
     if (inputState[i] == LOW) {
       inputStateByte = inputStateByte & ~thisValue;
       if (lastInputState[i] == HIGH) {
-        Serial1COM.writeByte(thisEvent);
+       // Serial1COM.writeByte(thisEvent);
         usbEventBuffer.uint8[i+8] = thisEvent;
         newEvent = true;
       }
@@ -212,9 +228,12 @@ void loop() {
     lastInputState[i] = inputState[i];
   }
 
- // if ((portEnabled) && (newEvent)) {
- //   Serial1COM.writeByte(inputStateByte);
- // }
+  if (newEvent) {
+    //inputStateByte ^= 0X08;
+    Serial1COM.writeByte(inputStateByte);
+    //delay(3000);
+    
+  }
   
   if (newEvent && usbStreaming) {
     myUSB.writeByteArray(usbEventBuffer.uint8, 12);
@@ -249,8 +268,8 @@ void returnModuleInfo() {
       Serial1COM.writeByte(*(eventNames[i]+j)); // Send the character
     }
   }
-  //Serial1COM.writeByte(1); // 1 if more info follows, 0 if not
-  //Serial1COM.writeByte('T'); // Op code for: Module Type (1 for LineState changes Module, 0 for Event type Module)
-  //Serial1COM.writeByte(1);  // LineState change Module
+  Serial1COM.writeByte(1); // 1 if more info follows, 0 if not
+  Serial1COM.writeByte('T'); // Op code for: Module Type (1 for LineState changes Module, 0 for Event type Module)
+  Serial1COM.writeByte(1);  // LineState change Module
   Serial1COM.writeByte(0); // 1 if more info follows, 0 if not
 }
